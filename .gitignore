@@ -6,7 +6,7 @@ dist/
 .venv/
 .pytest_cache/
 .ruff_cache/
-checkpoints/
+checkpoints
 outputs/
 *.pt
 *.ckpt
