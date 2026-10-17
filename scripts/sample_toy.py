@@ -11,6 +11,7 @@ from pathlib import Path
 import torch
 
 from flow_bed.models import LikelihoodGuidanceModel, PosteriorSampler, PriorFlowModel
+from flow_bed.models.history_encoder import HistoryEncoder
 from flow_bed.simulators import LinearGaussian
 
 
@@ -26,9 +27,10 @@ def main() -> None:
 
     ck = torch.load(args.ckpt, map_location="cpu")
     a = ck["args"]
-    prior = PriorFlowModel(a["dim"], hidden=a["hidden"])
-    guidance = LikelihoodGuidanceModel(a["dim"], y_dim=1, eps_dim=a["dim"], hidden=a["hidden"])
+    prior = PriorFlowModel(a["dim"], hidden_dims=a["hidden_dims"])
     prior.load_state_dict(ck["prior"])
+    encoder = HistoryEncoder(y_dim=1, eps_dim=a["dim"], hidden_dims=a["hidden_dims"])
+    guidance = LikelihoodGuidanceModel(prior, encoder, hidden_dims=a["hidden_dims"])
     guidance.load_state_dict(ck["guidance"])
     prior.eval()
     guidance.eval()
@@ -39,7 +41,8 @@ def main() -> None:
 
     sampler = PosteriorSampler(prior, guidance, solver=args.solver, divergence=args.divergence)
     with torch.no_grad():
-        theta, logq = sampler.sample(args.n_samples, y=y, eps=eps, return_log_prob=True)
+        history = encoder(y, eps)  # (1, out_dim)
+        theta, logq = sampler.sample(args.n_samples, history, return_log_prob=True)
     theta, logq = theta[0], logq[0]
 
     mean, cov = sim.posterior(y[0], eps[0])
@@ -51,7 +54,7 @@ def main() -> None:
 
     # log-density consistency: forward (sampling) vs backward (log_prob) and vs analytic
     with torch.no_grad():
-        logq_bwd = sampler.log_prob(theta[:200], y=y.expand(200, -1, -1), eps=eps.expand(200, -1, -1))
+        logq_bwd = sampler.log_prob(theta[:200], history.expand(200, -1))
     logp_true = sim.posterior_log_prob(theta[:200], y[0], eps[0])
     print(f"|logq_fwd - logq_bwd| mean : {(logq[:200] - logq_bwd).abs().mean():.4f}")
     print(f"corr(logq, analytic logp)  : {torch.corrcoef(torch.stack([logq_bwd, logp_true]))[0, 1]:.4f}")

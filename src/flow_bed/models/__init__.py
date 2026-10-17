@@ -1,11 +1,9 @@
-from flow_bed.models.flow_matching import LikelihoodGuidanceModel, LinearPath, PriorFlowModel
-from flow_bed.models.nodewrappers import CNFVectorField, GuidedVectorField, PosteriorSampler
+from flow_bed.models.flow_matching import LikelihoodGuidanceModel, PriorFlowModel
+from flow_bed.models.posterior_sampler import PosteriorSampler, VectorField
 
 __all__ = [
-    "LinearPath",
-    "PriorFlowModel",
     "LikelihoodGuidanceModel",
-    "GuidedVectorField",
-    "CNFVectorField",
     "PosteriorSampler",
+    "PriorFlowModel",
+    "VectorField",
 ]

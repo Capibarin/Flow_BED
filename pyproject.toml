@@ -13,6 +13,7 @@ dependencies = [
     "torch>=2.1",
     "torchdyn>=1.0.6",
     "numpy>=1.24",
+    "lightning>=2.4",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +24,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = ["slow: thorough or slow tests, run with `pytest -m slow` or `pytest -m ''`"]
 
 [tool.ruff]
 line-length = 100
