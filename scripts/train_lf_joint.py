@@ -5,9 +5,10 @@ Phase 1 (pre-training, random designs): prior flow, then history encoder + guida
 Phase 2 (joint): --joint-epochs x 781 steps, one-cycle (max lr 1e-4, div 20, final div 20, 2% warm-up) for both
     parts, gradient clipping at 5 per part. Per batch one rollout of q ~ U{q_min, ..., q_max} designs from the policy;
     as in JADAI, the noise is shared by all steps of a rollout (flow times tau_i = (u_0 + i / B) mod 1 and theta_0
-    per sample) and the policy sees the detached history state.
+    per sample) and the policy sees the detached history state (unless --no-detach-policy-input).
       policy   : minimises sum_t div w(x, tau, h_{1:t}) at x = tau theta + lambda_tau theta_0 (Hutchinson, -EIG)
-      guidance : minimises sum_t of its score loss on the policy's histories h_{1:t} (designs detached)
+      guidance : minimises sum_t of its score loss on the policy's histories h_{1:t} (designs detached),
+                 plus --random-mix x q x its score loss on a batch of q random designs (default 0, as JADAI)
     The prior stays frozen after phase 1. Unlike JADAI, q_min defaults to 1.
 
 Writes <out>_flow.pt (prior + guidance, loadable by build_flow) and <out>_policy.pt, also every --ckpt-every epochs.
@@ -74,6 +75,10 @@ def main() -> None:
     p.add_argument("--enc-hidden-dims", type=int, nargs="+", default=[128, 128])
     p.add_argument("--embed-dim", type=int, default=64)
     p.add_argument("--policy-hidden-dims", type=int, nargs="+", default=[128, 128, 128, 128])
+    p.add_argument("--no-detach-policy-input", action="store_true",
+                   help="let the policy loss backpropagate through the history state to earlier designs")
+    p.add_argument("--random-mix", type=float, default=0.0,
+                   help="weight of the guidance's score loss on random designs during joint training (x q)")
     p.add_argument("--out", default="checkpoints/lf_joint", help="prefix of <out>_flow.pt and <out>_policy.pt")
     p.add_argument("--log-csv", type=Path, default=None, help="one row per joint training step")
     p.add_argument("--ckpt-every", type=int, default=10)
@@ -140,12 +145,15 @@ def main() -> None:
         y = torch.zeros(B, 0, sim.y_dim, device=dev)
         policy_loss = guidance_loss = 0.0
         for _ in range(q):
-            xi = policy.net(guidance.encoder(y, eps).detach())[:, None]  # detached history state, as in JADAI
+            h = guidance.encoder(y, eps)
+            xi = policy.net(h if args.no_detach_policy_input else h.detach())[:, None]  # JADAI detaches
             eps = torch.cat([eps, xi], dim=1)
             y = torch.cat([y, sim.simulate(theta, xi)], dim=1)
             w = guidance(x, tau_p, guidance.encoder(y, eps))
             policy_loss = policy_loss + hutchinson_divergence(w, x, probe, create_graph=True).mean()
             guidance_loss = guidance_loss + score_loss(guidance, theta, theta0_g, tau_g, eps.detach(), y.detach())
+        if args.random_mix > 0:  # keep the guidance accurate off the policy's histories
+            guidance_loss = guidance_loss + args.random_mix * q * guidance.shared_step(sim.sample_joint(B, q, dev))
 
         # policy: gradient of the divergence utility w.r.t. the policy weights only
         grads = torch.autograd.grad(policy_loss, p_params)
