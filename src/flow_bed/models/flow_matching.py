@@ -48,12 +48,18 @@ def timestep_embedding(t: Tensor, dim: int, max_period: float = 1e4) -> Tensor:
     return emb
 
 
+ACTIVATIONS = {"selu": nn.SELU, "silu": nn.SiLU}
+LEGACY_ACTIVATION = "selu"  # checkpoints saved before the activation option: load with cfg.get("activation", this)
+
+
 class MLP(nn.Sequential):
-    def __init__(self, in_dim: int, hidden_dims: list[int], out_dim: int):
+    """``activation``: "silu" (default, smooth, so divergences can be differentiated again) or "selu"."""
+
+    def __init__(self, in_dim: int, hidden_dims: list[int], out_dim: int, activation: str = "silu"):
         layers: list[nn.Module] = []
         prev = in_dim
         for h in hidden_dims:
-            layers += [nn.Linear(prev, h), nn.SELU()]
+            layers += [nn.Linear(prev, h), ACTIVATIONS[activation]()]
             prev = h
         layers.append(nn.Linear(prev, out_dim))
         super().__init__(*layers)
@@ -69,14 +75,15 @@ class PriorFlowModel(nn.Module):
         time_embed_dim: int = 64,
         sigma_min: float = 0.0,
         sigma: float = 0.0,
+        activation: str = "silu",
     ):
         super().__init__()
         self.dim = dim
         self.time_embed_dim = time_embed_dim
         self.sigma_min = sigma_min
         self.sigma = sigma
-        self.vf_net = MLP(dim + time_embed_dim, list(hidden_dims), dim)
-        self.score_net = MLP(dim + time_embed_dim, list(hidden_dims), dim)
+        self.vf_net = MLP(dim + time_embed_dim, list(hidden_dims), dim, activation)
+        self.score_net = MLP(dim + time_embed_dim, list(hidden_dims), dim, activation)
 
     def lambda_t(self, t: Tensor) -> Tensor:
         return torch.sqrt((1 - (1 - self.sigma_min) * t) ** 2 + self.sigma * t * (1 - t))
@@ -119,13 +126,14 @@ class LikelihoodGuidanceModel(nn.Module):
         hidden_dims: list[int] = (256, 256, 256),
         time_embed_dim: int = 64,
         parametrization: str = "w",
+        activation: str = "silu",
     ):
         super().__init__()
         self.prior = prior.requires_grad_(False)
         self.encoder = encoder
         self.time_embed_dim = time_embed_dim
         self.parametrization = parametrization
-        self.net = MLP(prior.dim + time_embed_dim + encoder.out_dim, list(hidden_dims), prior.dim)
+        self.net = MLP(prior.dim + time_embed_dim + encoder.out_dim, list(hidden_dims), prior.dim, activation)
 
     def forward(self, theta_t: Tensor, t: Tensor, history: Tensor) -> Tensor:
         """w -> (B, d), the term added to the prior velocity; ``history`` = encoder(y, eps), shape (B, out_dim)."""
@@ -134,6 +142,14 @@ class LikelihoodGuidanceModel(nn.Module):
             t_ = t[:, None]
             out = (self.prior.lambda_t(t_) ** 2 - self.prior.lambda_sp_t(t_) * t_) * out
         return out
+
+    def w_and_h(self, theta_t: Tensor, t: Tensor, history: Tensor) -> tuple[Tensor, Tensor]:
+        """(w, h) with w = c_t h, from one network evaluation. With the "h" parametrisation h is the network output
+        (no division, also near t = 1, where c_t -> 0); with "w", h = w / c_t."""
+        out = self.net(torch.cat([theta_t, timestep_embedding(t, self.time_embed_dim), history], dim=-1))
+        t_ = t[:, None]
+        c_t = self.prior.lambda_t(t_) ** 2 - self.prior.lambda_sp_t(t_) * t_
+        return (c_t * out, out) if self.parametrization == "h" else (out, out / c_t)
 
     def shared_step(self, batch: tuple[Tensor, Tensor, Tensor]) -> Tensor:
         theta1, eps, y = batch

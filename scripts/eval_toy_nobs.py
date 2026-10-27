@@ -17,6 +17,7 @@ from pathlib import Path
 import torch
 
 from flow_bed.models import LikelihoodGuidanceModel, PosteriorSampler, PriorFlowModel
+from flow_bed.models.flow_matching import LEGACY_ACTIVATION
 from flow_bed.models.history_encoder import HistoryEncoder
 from flow_bed.simulators import LinearGaussian
 
@@ -35,10 +36,11 @@ def main() -> None:
     dev = torch.device(args.device)
     ck = torch.load(args.ckpt, map_location=dev)
     a = ck["args"]
-    prior = PriorFlowModel(a["dim"], hidden_dims=a["hidden_dims"])
+    act = a.get("activation", LEGACY_ACTIVATION)
+    prior = PriorFlowModel(a["dim"], hidden_dims=a["hidden_dims"], activation=act)
     prior.load_state_dict(ck["prior"])
-    encoder = HistoryEncoder(y_dim=1, eps_dim=a["dim"], hidden_dims=a["hidden_dims"])
-    guidance = LikelihoodGuidanceModel(prior, encoder, hidden_dims=a["hidden_dims"])
+    encoder = HistoryEncoder(y_dim=1, eps_dim=a["dim"], hidden_dims=a["hidden_dims"], activation=act)
+    guidance = LikelihoodGuidanceModel(prior, encoder, hidden_dims=a["hidden_dims"], activation=act)
     guidance.load_state_dict(ck["guidance"])
     guidance.to(dev).eval()
     sampler = PosteriorSampler(prior, guidance, solver=args.solver)

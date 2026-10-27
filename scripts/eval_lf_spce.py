@@ -17,8 +17,8 @@ from pathlib import Path
 import torch
 from torch import Tensor
 from train_lf_flow import build_flow
+from train_lf_policy import load_policy
 
-from flow_bed.models.policy import Policy
 from flow_bed.simulators.location_finding import LocationFinding
 
 
@@ -80,8 +80,7 @@ def main() -> None:
         for spec in args.policy:
             name, path = spec.split("=", 1)
             pk = torch.load(path, map_location=dev)
-            policy = Policy(guidance.encoder, sim.eps_dim, pk["config"]["policy_hidden_dims"]).to(dev).eval()
-            policy.net.load_state_dict(pk["policy"])
+            policy = load_policy(pk, guidance, sim).to(dev).eval()
             sources[f"{name} (epoch {pk.get('epoch', '?')})"] = policy
 
     print(f"sPCE, T={args.T}, L={args.L}, runs={args.runs}", flush=True)

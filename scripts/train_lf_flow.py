@@ -20,27 +20,35 @@ from pathlib import Path
 import torch
 
 from flow_bed.models import LikelihoodGuidanceModel, PriorFlowModel
+from flow_bed.models.flow_matching import LEGACY_ACTIVATION
 from flow_bed.models.history_encoder import HistoryEncoder, SelfAttentionHistoryEncoder
 from flow_bed.simulators.location_finding import LocationFinding
 
 
+def build_encoder(cfg: dict, sim: LocationFinding) -> HistoryEncoder | SelfAttentionHistoryEncoder:
+    """History encoder from a config dict (the parsed arguments)."""
+    y_norm = {"y_loc": cfg.get("y_loc", 0.0), "y_scale": cfg.get("y_scale", 1.0)}
+    act = cfg.get("activation", LEGACY_ACTIVATION)
+    if cfg["encoder"] == "deepsets":
+        return HistoryEncoder(sim.y_dim, sim.eps_dim, cfg["enc_hidden_dims"], cfg["embed_dim"], **y_norm, activation=act)
+    return SelfAttentionHistoryEncoder(
+        sim.y_dim, sim.eps_dim, cfg["enc_hidden_dims"], cfg["embed_dim"], cfg["attn_layers"], cfg["attn_heads"],
+        **y_norm, activation=act, ff_dim=cfg.get("attn_ff_dim"),
+    )
+
+
 def build_guidance(cfg: dict, sim: LocationFinding, prior: PriorFlowModel) -> LikelihoodGuidanceModel:
     """History encoder + guidance from a config dict (the parsed arguments). Freezes ``prior``."""
-    y_norm = {"y_loc": cfg.get("y_loc", 0.0), "y_scale": cfg.get("y_scale", 1.0)}
-    if cfg["encoder"] == "deepsets":
-        encoder = HistoryEncoder(sim.y_dim, sim.eps_dim, cfg["enc_hidden_dims"], cfg["embed_dim"], **y_norm)
-    else:
-        encoder = SelfAttentionHistoryEncoder(
-            sim.y_dim, sim.eps_dim, cfg["enc_hidden_dims"], cfg["embed_dim"], cfg["attn_layers"], cfg["attn_heads"],
-            **y_norm,
-        )
     hidden_dims = cfg.get("guidance_hidden_dims") or cfg["hidden_dims"]
-    return LikelihoodGuidanceModel(prior, encoder, hidden_dims=hidden_dims, parametrization=cfg.get("param", "w"))
+    return LikelihoodGuidanceModel(
+        prior, build_encoder(cfg, sim), hidden_dims=hidden_dims, parametrization=cfg.get("param", "w"),
+        activation=cfg.get("activation", LEGACY_ACTIVATION),
+    )
 
 
 def build_flow(cfg: dict, sim: LocationFinding) -> tuple[PriorFlowModel, LikelihoodGuidanceModel]:
     """Prior flow and guidance, e.g. to load a checkpoint of this script."""
-    prior = PriorFlowModel(sim.dim, hidden_dims=cfg["hidden_dims"])
+    prior = PriorFlowModel(sim.dim, hidden_dims=cfg["hidden_dims"], activation=cfg.get("activation", LEGACY_ACTIVATION))
     return prior, build_guidance(cfg, sim, prior)
 
 
@@ -87,6 +95,7 @@ def main() -> None:
     p.add_argument("--embed-dim", type=int, default=64)
     p.add_argument("--attn-layers", type=int, default=4)
     p.add_argument("--attn-heads", type=int, default=2)
+    p.add_argument("--activation", choices=["silu", "selu"], default="silu", help="activation of all MLPs")
     p.add_argument("--out", type=Path, default=Path("checkpoints/lf_flow.pt"))
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=42)
@@ -100,7 +109,7 @@ def main() -> None:
         _, _, y = sim.sample_joint(1_000_000, 1, dev)  # observations under random designs
         cfg["y_loc"], cfg["y_scale"] = y.mean().item(), y.std().item()
         print(f"y standardisation: loc {cfg['y_loc']:.3f}  scale {cfg['y_scale']:.3f}", flush=True)
-    prior = PriorFlowModel(sim.dim, hidden_dims=args.hidden_dims).to(dev)
+    prior = PriorFlowModel(sim.dim, hidden_dims=args.hidden_dims, activation=args.activation).to(dev)
     total = args.epochs * args.steps_per_epoch
     warmup = int(0.002 * total)
     prior_total = (args.prior_epochs or args.epochs) * args.steps_per_epoch
