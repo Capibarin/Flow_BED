@@ -19,9 +19,13 @@ Phase 2 (joint): --joint-epochs x 781 steps, one-cycle (max lr 1e-4, div 20, fin
     q = q_max (= T after the warm-up) instead of a random q: the sum counts the information of experiment s
     (q - s + 1) times and favours early information. The guidance part is unchanged (score loss on every prefix
     h_{1:t}; the random-design batch keeps a random q ~ U{q_min, ..., q_max}).
+--policy-term final_random keeps the final term alone but with a random q ~ U{q_min, ..., q_max} (the -EIG of a
+    random-length rollout, every length weighted equally).
+--config file.yaml sets the defaults of these arguments (see configs/lf and flow_bed.config).
 
 Writes <out>_flow.pt (prior + guidance, loadable by build_flow) and <out>_policy.pt, also every --ckpt-every epochs.
 
+    python scripts/train_lf_joint.py --config configs/lf/joint_div.yaml --out checkpoints/lf_joint_div
     python scripts/train_lf_joint.py --out checkpoints/lf_joint --log-csv /vol/main/checkpoints/logs/lf_joint.csv
 """
 
@@ -37,6 +41,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from train_lf_flow import build_flow, build_guidance, q_max_at, train
 
+from flow_bed.config import parse_args
 from flow_bed.models import LikelihoodGuidanceModel, PriorFlowModel
 from flow_bed.models.policy import Policy
 from flow_bed.models.posterior_sampler import hutchinson_divergence
@@ -123,9 +128,10 @@ def main() -> None:
     p.add_argument("--objective", choices=["div", "path"], default="div",
                    help="policy term: div = straight conditional path, path = prior-ODE path (see above)")
     p.add_argument("--path-steps", type=int, default=32, help="RK4 steps of the prior ODE for --objective path")
-    p.add_argument("--policy-term", choices=["sum", "final"], default="sum",
-                   help="policy loss: sum over the rollout's steps, or its final term only with q = q_max (see above)")
-    args = p.parse_args()
+    p.add_argument("--policy-term", choices=["sum", "final", "final_random"], default="sum",
+                   help="policy loss: sum over the rollout's steps, or its final term only with q = q_max (final) or a "
+                        "random q (final_random) (see above)")
+    args = parse_args(p)
     cfg = {**vars(args), "log_csv": str(args.log_csv), "init_flow": str(args.init_flow)}
 
     torch.manual_seed(args.seed)

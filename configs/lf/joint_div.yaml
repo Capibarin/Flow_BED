@@ -1,0 +1,20 @@
+# Joint policy + posterior training from a trained flow as checkpoints/lf_joint_attn400k_div_{flow,policy}.pt:
+# straight-path divergence objective, random-design score loss mixed in, 400 x 781 steps (one-cycle, max lr 1e-4).
+# The flow's architecture comes from init_flow. Without init_flow the flow is pre-trained first (pre_epochs, lr_pre).
+# scripts/train_lf_joint.py --config configs/lf/joint_div.yaml --out <prefix> [--policy-term final_random]
+init_flow: checkpoints/train_curve_anneal_silu/ckpts/s1_400k_attn.pt
+objective: div
+policy_term: sum
+random_mix: 1.0
+no_detach_policy_input: true
+Q: 30
+q_min: 1
+joint_epochs: 400
+steps_per_epoch: 781
+batch: 256
+lr_joint: 1.0e-4
+policy_hidden_dims: [128, 128, 128, 128]
+design_bound: 5.0
+bound_type: radial
+ckpt_every: 10
+seed: 42

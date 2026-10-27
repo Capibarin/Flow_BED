@@ -1,0 +1,21 @@
+# Decoupled policy on a frozen flow as checkpoints/lf_policy_div_hutch_silu_b5_attn400k.pt: divergence utility
+# (Hutchinson), 400 x 781 steps (one-cycle, max lr 1e-4). The best variant so far: policy_term final_random.
+# scripts/train_lf_policy.py --config configs/lf/policy_div.yaml --out ... [--policy-term final_random]
+flow_ckpt: checkpoints/train_curve_anneal_silu/ckpts/s1_400k_attn.pt
+utility: divergence
+divergence: hutchinson
+policy_term: sum
+tau_max: 1.0
+tau_anneal_frac: 0.0
+Q: 30
+q_min: 2
+epochs: 400
+steps_per_epoch: 781
+batch: 256
+lr: 1.0e-4
+policy_hidden_dims: [128, 128, 128, 128]
+activation: silu
+design_bound: 5.0
+bound_type: radial
+ckpt_every: 10
+seed: 42

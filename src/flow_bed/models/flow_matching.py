@@ -49,7 +49,7 @@ def timestep_embedding(t: Tensor, dim: int, max_period: float = 1e4) -> Tensor:
 
 
 ACTIVATIONS = {"selu": nn.SELU, "silu": nn.SiLU}
-LEGACY_ACTIVATION = "selu"  # checkpoints saved before the activation option: load with cfg.get("activation", this)
+LEGACY_ACTIVATION = "silu"  # checkpoints saved before the activation option: load with cfg.get("activation", this)
 
 
 class MLP(nn.Sequential):

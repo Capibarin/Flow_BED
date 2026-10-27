@@ -14,6 +14,7 @@ dependencies = [
     "torchdyn>=1.0.6",
     "numpy>=1.24",
     "lightning>=2.4",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]

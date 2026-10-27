@@ -1,0 +1,26 @@
+# Posterior flow with an attention history encoder: the prior (50 x 1000 steps), then encoder + guidance on random
+# designs (400 x 1000 steps), both one-cycle with max lr 1e-3.
+#   from scratch:          scripts/train_lf_flow.py --config configs/lf/flow_attn.yaml --out ...
+#   with a trained prior:  ... --init-prior <flow checkpoint>  (its prior is frozen, prior_epochs and hidden_dims unused)
+# With --init-prior checkpoints/train_curve_anneal_silu/ckpts/prior_silu.pt (these prior settings, seed 42) this is
+# checkpoints/train_curve_anneal_silu/ckpts/s1_400k_attn.pt.
+prior_epochs: 50
+hidden_dims: [512, 512, 512]  # prior network
+# encoder + guidance
+epochs: 400
+steps_per_epoch: 1000
+batch: 256
+lr: 1.0e-3
+Q: 30
+q_min: 1
+param: h
+guidance_hidden_dims: [512, 512, 512, 512]
+encoder: attention
+enc_hidden_dims: [256, 256]
+embed_dim: 64
+attn_layers: 4
+attn_heads: 4
+attn_ff_dim: 256
+activation: silu
+ckpt_every: 50
+seed: 1

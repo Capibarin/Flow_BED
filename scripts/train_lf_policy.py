@@ -21,7 +21,9 @@ q ~ U{q_min, ..., q_max} adaptive steps per batch. Both utilities target EIG = E
                       (1 - tau_max) / tau_max, which caps the reward for resolving a source beyond that scale;
                       --tau-anneal-frac f raises tau_max linearly to 1 over the last f of the steps (the policy at the
                       start of the annealing is also saved as <out>_before_anneal.pt).
+--config file.yaml   sets the defaults of these arguments (see configs/lf and flow_bed.config).
 
+    python scripts/train_lf_policy.py --config configs/lf/policy_div.yaml --out checkpoints/lf_policy_div.pt
     python scripts/train_lf_policy.py --utility divergence --out checkpoints/lf_policy_div.pt
     python scripts/train_lf_policy.py --utility density --batch 64 --out checkpoints/lf_policy_density.pt
 """
@@ -37,6 +39,7 @@ from pathlib import Path
 import torch
 from train_lf_flow import build_encoder, build_flow, q_max_at
 
+from flow_bed.config import parse_args
 from flow_bed.models import LikelihoodGuidanceModel, PosteriorSampler
 from flow_bed.models.flow_matching import LEGACY_ACTIVATION
 from flow_bed.models.policy import Policy
@@ -99,7 +102,7 @@ def main() -> None:
     p.add_argument("--ckpt-every", type=int, default=10, help="also save the policy to --out every this many epochs")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=42)
-    args = p.parse_args()
+    args = parse_args(p)
     if args.divergence is None:
         args.divergence = "exact" if args.utility == "divergence" else "hutchinson"
     if args.own_encoder and args.detach_policy_input:
