@@ -25,6 +25,13 @@ q ~ U{q_min, ..., q_max} adaptive steps per batch. Both utilities target EIG = E
                       (1 - tau_max) / tau_max, which caps the reward for resolving a source beyond that scale;
                       --tau-anneal-frac f raises tau_max linearly to 1 over the last f of the steps (the policy at the
                       start of the annealing is also saved as <out>_before_anneal.pt).
+--tau-coarse A B      (divergence utility) per batch, tau ~ Beta(A, B) with probability alpha, else tau ~ U[0, 1] (a
+                      coarse-scale curriculum, biased while alpha > 0); --tau-mix W N: alpha = 1 for the first W of the
+                      steps, falls linearly to 0 over the next N, and is 0 for the rest.
+--tau-density file    (divergence utility) tau ~ 0.95 rho + 0.05 U[0, 1] with rho ∝ the design-gradient RMS of
+                      runs/scripts/analysis/tau_rms.py (policy designs, q ~ U{1..30}, Hutchinson; the JSON file), and
+                      the loss weighted by 1 / (0.95 rho + 0.05): unbiased, with less gradient variance than U[0, 1]
+                      (the uniform part bounds the weights by 20).
 --config file.yaml   sets the defaults of these arguments (see runs/configs/lf and flow_bed.config).
 
     python runs/scripts/training/train_lf_policy.py --config runs/configs/lf/policy_div.yaml --out checkpoints/lf_policy_div.pt
@@ -40,15 +47,18 @@ import shutil
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from flow_bed.config import parse_args
 from flow_bed.lf.builders import ENCODER_KEYS, build_encoder, build_flow, build_sim
+from flow_bed.lf.tau_density import load_rho, sample_tau
 from flow_bed.lf.training import q_max_at
 from flow_bed.models import PosteriorSampler
 from flow_bed.models.policy import Policy
 from flow_bed.models.posterior_sampler import exact_divergence, hutchinson_divergence
 
+RHO_FLOOR = 0.05  # --tau-density: weight of the uniform part of the sampling density
 
 def main() -> None:
     p = argparse.ArgumentParser()
@@ -89,6 +99,13 @@ def main() -> None:
     p.add_argument("--tau-max", type=float, default=1.0, help="divergence utility: tau ~ U[0, tau_max]")
     p.add_argument("--tau-anneal-frac", type=float, default=0.0,
                    help="raise tau_max linearly to 1 over this last fraction of the steps")
+    p.add_argument("--tau-coarse", type=float, nargs=2, default=None, metavar=("A", "B"),
+                   help="divergence utility: mix tau ~ Beta(A, B) into U[0, 1] with weight alpha (see --tau-mix)")
+    p.add_argument("--tau-mix", type=float, nargs=2, default=[0.1, 0.8], metavar=("W", "N"),
+                   help="--tau-coarse: alpha = 1 for the first W of the steps, then linearly to 0 over the next N")
+    p.add_argument("--tau-density", type=Path, default=None,
+                   help="divergence utility: tau from the variance-optimal density of this tau_rms.py JSON, loss "
+                        "weighted by 1 / density (unbiased)")
     p.add_argument("--ckpt-every", type=int, default=10, help="also save the policy to --out every this many epochs")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=42)
@@ -101,7 +118,20 @@ def main() -> None:
         if args.utility != "divergence" or args.policy_term != "sum" or args.own_encoder:
             p.error("--greedy needs --utility divergence, --policy-term sum and the flow's encoder")
         args.detach_policy_input = True  # else design t reaches later terms through the policy's next input
-    cfg = {**vars(args), "flow_ckpt": str(args.flow_ckpt), "out": str(args.out), "log_csv": str(args.log_csv)}
+    tau_options = [args.tau_coarse is not None, args.tau_density is not None, args.tau_max < 1 or args.tau_anneal_frac > 0]
+    if sum(tau_options) > 1:
+        p.error("--tau-coarse, --tau-density and --tau-max / --tau-anneal-frac are mutually exclusive")
+    if any(tau_options) and args.utility != "divergence":
+        p.error("the tau options need --utility divergence")
+    if args.tau_coarse is not None and sum(args.tau_mix) > 1:
+        p.error("--tau-mix W N needs W + N <= 1")
+    cfg = {**vars(args), "flow_ckpt": str(args.flow_ckpt), "out": str(args.out), "log_csv": str(args.log_csv),
+           "tau_density": str(args.tau_density)}
+    if args.tau_density is not None:
+        rho_taus, rho = load_rho(args.tau_density)
+        cfg["tau_rho"] = {"taus": rho_taus.tolist(), "rho": rho.tolist(), "floor": RHO_FLOOR}  # as used
+    if args.tau_coarse is not None:
+        coarse = torch.distributions.Beta(*args.tau_coarse)
 
     torch.manual_seed(args.seed)
     dev = torch.device(args.device)
@@ -143,7 +173,7 @@ def main() -> None:
         args.log_csv.parent.mkdir(parents=True, exist_ok=True)
         log_file = open(args.log_csv, "w", newline="")  # noqa: SIM115 (closed after training)
         writer = csv.writer(log_file)
-        writer.writerow(["step", "epoch", "q", "loss", "loss_per_q", "lr", "nfe", "seconds"])
+        writer.writerow(["step", "epoch", "q", "loss", "loss_per_q", "lr", "nfe", "seconds", "tau", "tau_weight"])
 
     def save(epoch: int) -> None:
         ck_out = {"config": cfg, "policy": policy.net.state_dict(), "epoch": epoch}
@@ -161,9 +191,20 @@ def main() -> None:
         q_max = q_max_at(step, args.q_min, args.Q, warmup)
         q = q_max if args.policy_term == "final" else int(torch.randint(args.q_min, q_max + 1, ()))
         theta = sim.sample_prior(args.batch, dev)
+        tau_weight = 1.0
         if args.utility == "divergence":
             # one tau per batch and one theta_0 per sample, shared by all steps of the rollout
-            tau = (tau_max * torch.rand(1, device=dev)).expand(args.batch)
+            if args.tau_coarse is not None:
+                w0, n = args.tau_mix
+                alpha = 1.0 if step < w0 * total else max(0.0, 1 - (step / total - w0) / n) if n > 0 else 0.0
+                tau0 = coarse.sample() if torch.rand(()) < alpha else torch.rand(())
+            elif args.tau_density is not None:
+                u = torch.rand(2)
+                tau0 = u[1] if u[0] < RHO_FLOOR else torch.tensor(float(sample_tau(rho_taus, rho, u[1].numpy())))
+                tau_weight = 1 / ((1 - RHO_FLOOR) * float(np.interp(float(tau0), rho_taus, rho)) + RHO_FLOOR)
+            else:
+                tau0 = tau_max * torch.rand(1, device=dev)  # as before the tau options
+            tau = tau0.to(dev).expand(args.batch)
             lam = prior.lambda_t(tau)[:, None]
             x = (tau[:, None] * theta + lam * torch.randn_like(theta)).requires_grad_(True)
             probe = torch.randn_like(theta)  # Hutchinson probe, shared by all steps
@@ -196,7 +237,7 @@ def main() -> None:
             loss = -sampler.log_prob(theta, h_f).mean()
 
         opt.zero_grad()
-        loss.backward()
+        (tau_weight * loss).backward()  # tau_weight: 1, or 1 / rho with --tau-density
         torch.nn.utils.clip_grad_norm_(params, max_norm=5.0)
         lr = opt.param_groups[0]["lr"]
         opt.step()
@@ -204,7 +245,9 @@ def main() -> None:
         if writer is not None:
             nfe_step = nfe[0] if args.utility == "density" else ""
             writer.writerow([step, step // args.steps_per_epoch, q, f"{loss.item():.6g}", f"{loss.item() / q:.6g}",
-                             f"{lr:.6g}", nfe_step, f"{time.time() - t0:.1f}"])
+                             f"{lr:.6g}", nfe_step, f"{time.time() - t0:.1f}",
+                             f"{tau[0].item():.4f}" if args.utility == "divergence" else "",
+                             f"{tau_weight:.4g}" if args.utility == "divergence" else ""])
         if (step + 1) % args.steps_per_epoch == 0:
             epoch = (step + 1) // args.steps_per_epoch
             if log_file is not None:

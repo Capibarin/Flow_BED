@@ -20,27 +20,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from flow_bed.lf.tau_density import rho_nodes, sample_tau
+
 COL = {"1": "#2a78d6", "10": "#eb6834", "30": "#1baf7a", "mix": "#0b0b0b"}
 LAB = {"1": "n = 1", "10": "n = 10", "30": "n = 30", "mix": "q ~ U{1..30} (training)"}
 INK2, GRID = "#52514e", "#e4e3df"
-
-
-def rho_nodes(taus, rms):
-    """Values of the piecewise-linear density rho ∝ rms at the grid nodes (∫ rho = 1, trapezoid = exact)."""
-    return rms / np.trapezoid(rms, taus)
-
-
-def sample_tau(taus, rho, u):
-    """Inverse CDF of the piecewise-linear density with node values rho on taus, for uniforms u."""
-    dt = np.diff(taus)
-    seg = dt * (rho[:-1] + rho[1:]) / 2
-    cdf = np.concatenate([[0], np.cumsum(seg)])
-    k = np.clip(np.searchsorted(cdf, u, side="right") - 1, 0, len(dt) - 1)
-    r = u - cdf[k]  # mass needed inside segment k: a s + b s^2 / 2 = r, s = tau - tau_k
-    a, b = rho[k], (rho[k + 1] - rho[k]) / dt[k]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        s = np.where(np.abs(b) > 1e-12, (np.sqrt(np.maximum(a**2 + 2 * b * r, 0)) - a) / b, r / np.maximum(a, 1e-300))
-    return taus[k] + np.clip(s, 0, dt[k])
 
 
 def gain(taus, m2, rho):

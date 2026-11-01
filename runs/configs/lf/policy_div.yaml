@@ -16,6 +16,9 @@ own_encoder: false           # policy has its own history encoder instead of the
 policy_enc_hidden_dims: null # own_encoder only (default: as the flow's encoder)
 tau_max: 1.0
 tau_anneal_frac: 0.0
+tau_coarse: null             # [A, B]: mix tau ~ Beta(A, B) into U[0, 1] (curriculum, see tau_mix)
+tau_mix: [0.1, 0.8]          # tau_coarse: coarse only for the first 10%, annealed to uniform over 80%
+tau_density: null            # tau_rms.py JSON: tau ~ variance-optimal rho, loss weighted by 1 / rho
 Q: 30
 q_min: 2
 epochs: 400

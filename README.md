@@ -109,6 +109,14 @@ RUN=sigma1 FLOW_ARGS="--sigma 1.0" POLICY=detach POLICY_ARGS="--detach-policy-in
 RUN=sigma1 POLICY=detach sbatch --dependency=afterok:<training job id> runs/sbatches/lf_eval.sbatch
 ```
 
+For a grid, `lf_prior.sbatch`, `lf_guidance.sbatch` and `lf_policy.sbatch` run the three stages as separate jobs (one
+prior for all, since it does not depend on sigma and m). `runs/sbatches/lf_grid.sh` submits a whole grid at once with
+dependencies (prior -> a guidance per simulator -> its policies -> their evaluations); edit the lists at its top.
+
+```bash
+bash runs/sbatches/lf_grid.sh
+```
+
 ### Flow-time density of the policy gradient
 
 ```bash
