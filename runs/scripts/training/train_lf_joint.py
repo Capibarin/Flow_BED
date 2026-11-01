@@ -1,15 +1,15 @@
-"""Location finding with JADAI's training schedule: pre-training on random designs, then policy and guidance jointly.
+"""Location finding with a two-phase training schedule: pre-training on random designs, then policy and guidance jointly.
 
 Phase 1 (pre-training, random designs): prior flow, then history encoder + guidance; --pre-epochs x 781 steps each,
     one-cycle schedule (max lr 1e-3, div 1e5, final div 2, 8% warm-up).
 Phase 2 (joint): --joint-epochs x 781 steps, one-cycle (max lr 1e-4, div 20, final div 20, 2% warm-up) for both
     parts, gradient clipping at 5 per part. Per batch one rollout of q ~ U{q_min, ..., q_max} designs from the policy;
-    as in JADAI, the noise is shared by all steps of a rollout (flow times tau_i = (u_0 + i / B) mod 1 and theta_0
+    the noise is shared by all steps of a rollout (flow times tau_i = (u_0 + i / B) mod 1 and theta_0
     per sample) and the policy sees the detached history state (unless --no-detach-policy-input).
       policy   : minimises sum_t div w(x, tau, h_{1:t}) at x = tau theta + lambda_tau theta_0 (Hutchinson, -EIG)
       guidance : minimises sum_t of its score loss on the policy's histories h_{1:t} (designs detached),
-                 plus --random-mix x q x its score loss on a batch of q random designs (default 0, as JADAI)
-    The prior stays frozen after phase 1. Unlike JADAI, q_min defaults to 1.
+                 plus --random-mix x q x its score loss on a batch of q random designs (default 0)
+    The prior stays frozen after phase 1. q_min defaults to 1.
 --init-flow skips phase 1 and starts from a trained prior + guidance (e.g. an annealed checkpoint; its architecture is
     taken from that checkpoint). --design-bound bounds the policy's designs (see flow_bed.models.policy).
 --objective path replaces the policy's straight-path term by the prior-path integrand -div w - w . s^h at
@@ -21,12 +21,12 @@ Phase 2 (joint): --joint-epochs x 781 steps, one-cycle (max lr 1e-4, div 20, fin
     h_{1:t}; the random-design batch keeps a random q ~ U{q_min, ..., q_max}).
 --policy-term final_random keeps the final term alone but with a random q ~ U{q_min, ..., q_max} (the -EIG of a
     random-length rollout, every length weighted equally).
---config file.yaml sets the defaults of these arguments (see configs/lf and flow_bed.config).
+--config file.yaml sets the defaults of these arguments (see runs/configs/lf and flow_bed.config).
 
 Writes <out>_flow.pt (prior + guidance, loadable by build_flow) and <out>_policy.pt, also every --ckpt-every epochs.
 
-    python scripts/train_lf_joint.py --config configs/lf/joint_div.yaml --out checkpoints/lf_joint_div
-    python scripts/train_lf_joint.py --out checkpoints/lf_joint --log-csv /vol/main/checkpoints/logs/lf_joint.csv
+    python runs/scripts/training/train_lf_joint.py --config runs/configs/lf/joint_div.yaml --out checkpoints/lf_joint_div
+    python runs/scripts/training/train_lf_joint.py --out checkpoints/lf_joint --log-csv /vol/main/checkpoints/logs/lf_joint.csv
 """
 
 from __future__ import annotations
@@ -39,17 +39,17 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from train_lf_flow import build_flow, build_guidance, q_max_at, train
 
 from flow_bed.config import parse_args
+from flow_bed.lf.builders import OUTCOME_KEYS, build_flow, build_guidance, build_sim
+from flow_bed.lf.training import q_max_at, train
 from flow_bed.models import LikelihoodGuidanceModel, PriorFlowModel
 from flow_bed.models.policy import Policy
 from flow_bed.models.posterior_sampler import hutchinson_divergence
-from flow_bed.simulators.location_finding import LocationFinding
 
 
 def stratified_times(batch: int, device) -> Tensor:
-    """JADAI's low-discrepancy flow times t_i = (u_0 + i / B) mod 1, shape (B,)."""
+    """Low-discrepancy flow times t_i = (u_0 + i / B) mod 1, shape (B,)."""
     return (torch.rand(1, device=device) + torch.arange(batch, device=device) / batch) % 1
 
 
@@ -121,6 +121,10 @@ def main() -> None:
     p.add_argument("--attn-layers", type=int, default=2)
     p.add_argument("--attn-heads", type=int, default=4)
     p.add_argument("--attn-ff-dim", type=int, default=None, help="feed-forward width of the attention layers")
+    p.add_argument("--sigma", type=float, default=None,
+                   help="observation noise std of y (default: --init-flow's, else 0.5)")
+    p.add_argument("--m", type=float, default=None,
+                   help="offset m in a / (m + |xi - theta_k|^2) (default: --init-flow's, else 1e-4)")
     p.add_argument("--init-flow", type=Path, default=None,
                    help="start from this trained flow checkpoint (prior + guidance) instead of phase 1")
     p.add_argument("--design-bound", type=float, default=None, help="bound s on the designs (default: unbounded)")
@@ -136,12 +140,19 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     dev = torch.device(args.device)
-    sim = LocationFinding()
+    ck = torch.load(args.init_flow, map_location=dev) if args.init_flow is not None else None
+    if ck is not None:  # the outcome model is the trained flow's
+        flow_sim = build_sim(ck["config"])
+        for k in OUTCOME_KEYS:
+            if cfg[k] is not None and cfg[k] != getattr(flow_sim, k):
+                p.error(f"--{k} {cfg[k]} differs from the flow's ({getattr(flow_sim, k)})")
+            cfg[k] = getattr(flow_sim, k)
+    sim = build_sim(cfg)
+    cfg.update(sigma=sim.sigma, m=sim.m)
     B, spe = args.batch, args.steps_per_epoch
 
-    if args.init_flow is not None:
+    if ck is not None:
         # the architecture comes from the trained checkpoint
-        ck = torch.load(args.init_flow, map_location=dev)
         model_keys = ["hidden_dims", "guidance_hidden_dims", "param", "encoder", "enc_hidden_dims", "embed_dim",
                       "attn_layers", "attn_heads", "attn_ff_dim", "activation", "y_loc", "y_scale"]
         cfg.update({k: ck["config"][k] for k in model_keys if k in ck["config"]})
@@ -218,7 +229,7 @@ def main() -> None:
         h = enc.pool(theta.new_zeros(B, 0, enc.embed_dim))  # empty history
         policy_loss = guidance_loss = 0.0
         for t in range(q):
-            xi = policy.design(h if args.no_detach_policy_input else h.detach())[:, None]  # JADAI detaches
+            xi = policy.design(h if args.no_detach_policy_input else h.detach())[:, None]  # detached by default
             y_new = sim.simulate(theta, xi)
             tok_p.append(enc.tokens(y_new, xi))
             h = enc.pool(torch.cat(tok_p, dim=1))  # history incl. this step: policy loss now, policy input next step

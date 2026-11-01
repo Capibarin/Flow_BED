@@ -6,7 +6,7 @@ flow posterior and compares it with the analytic posterior:
     cov error  : ||Sigma_flow - Sigma||_F / ||Sigma||_F
     corr       : correlation between log q(theta | y, eps) of the flow and the analytic log p(theta | y, eps)
 
-    python scripts/eval_toy_nobs.py --ckpt checkpoints/toy.pt
+    python runs/scripts/evaluation/eval_toy_nobs.py --ckpt checkpoints/toy.pt
 """
 
 from __future__ import annotations

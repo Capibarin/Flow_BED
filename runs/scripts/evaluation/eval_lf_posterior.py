@@ -10,7 +10,7 @@ For each n, n_contexts true thetas with n random designs; per context, S flow sa
     calibration  rank r = P_q(log q(theta) > log q(theta_true)); for a calibrated posterior r ~ U[0, 1], so the true
                theta lies in the 50% / 90% highest-density regions in 50% / 90% of the contexts
 
-    python scripts/eval_lf_posterior.py --flow-ckpt checkpoints/lf_flow.pt
+    python runs/scripts/evaluation/eval_lf_posterior.py --flow-ckpt checkpoints/lf_flow.pt
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from pathlib import Path
 
 import torch
 from torch import Tensor
-from train_lf_flow import build_flow
 
+from flow_bed.lf.builders import build_flow, build_sim
 from flow_bed.models import PosteriorSampler
 from flow_bed.simulators.location_finding import LocationFinding
 
@@ -51,8 +51,8 @@ def main() -> None:
     args = p.parse_args()
 
     dev = torch.device(args.device)
-    sim = LocationFinding()
     ck = torch.load(args.flow_ckpt, map_location=dev)
+    sim = build_sim(ck["config"])
     prior, guidance = build_flow(ck["config"], sim)
     prior.load_state_dict(ck["prior"])
     guidance.load_state_dict(ck["guidance"])

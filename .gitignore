@@ -8,6 +8,8 @@ dist/
 .ruff_cache/
 checkpoints
 outputs/
+logs/
+multirun/
 *.pt
 *.ckpt
 .DS_Store

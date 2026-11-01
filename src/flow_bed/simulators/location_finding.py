@@ -1,10 +1,10 @@
-"""Location finding (as in DAD / JADAI): K signal sources in the plane, measured at design locations.
+"""Location finding (as in DAD): K signal sources in the plane, measured at design locations.
 
 theta = (theta_1, ..., theta_K), theta_k in R^dx,  theta ~ N(0, I)       (flattened to (B, K * dx) for the flow)
 mu(theta, eps) = b + sum_k a / (m + ||eps - theta_k||^2)
 y | theta, eps ~ N(log mu(theta, eps), sigma^2)                          (reparametrised, differentiable in eps)
 Random designs are drawn from the same prior, eps ~ N(0, I).
-Defaults match JADAI: K = 2, dx = 2, a = 1, b = 0.1, m = 1e-4, sigma = 0.5.
+Defaults: K = 2, dx = 2, a = 1, b = 0.1, m = 1e-4, sigma = 0.5.
 """
 
 from __future__ import annotations

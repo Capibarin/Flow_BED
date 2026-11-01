@@ -1,12 +1,12 @@
-"""Stage 2 for location finding: train the design policy on top of the frozen flow from scripts/train_lf_flow.py.
+"""Stage 2 for location finding: train the design policy on top of the frozen flow from runs/scripts/training/train_lf_flow.py.
 
 The policy shares the guidance model's (frozen) history encoder and only its head is trained; with --own-encoder it has
-a separate, freshly initialised history encoder that is trained with the head. Settings follow JADAI's
-joint phase: 400 epochs x 781 steps, Adam with a one-cycle schedule (max lr 1e-4), gradient clipping at 5, and
+a separate, freshly initialised history encoder that is trained with the head. Settings:
+400 epochs x 781 steps, Adam with a one-cycle schedule (max lr 1e-4), gradient clipping at 5, and
 q ~ U{q_min, ..., q_max} adaptive steps per batch. Both utilities target EIG = E[log p(theta | h)] - E[log p(theta)]:
 
 --utility divergence  EIG = -E[div_x w(x, tau, h)] at x = tau * theta + lambda_tau * theta_0, tau ~ U[0, 1]
-                      (the posterior flow contracts more than the prior flow). As in JADAI's rollout utility, one tau
+                      (the posterior flow contracts more than the prior flow). One tau
                       per batch and one theta_0 per sample are shared by all steps, and the policy minimises
                       sum_{t=1..q} div w(x, tau, h_{1:t}) (exact divergence by default; with Hutchinson, one
                       probe per sample, also shared by all steps).
@@ -17,15 +17,19 @@ q ~ U{q_min, ..., q_max} adaptive steps per batch. Both utilities target EIG = E
                       experiment s (q - s + 1) times and favours early information.
 --policy-term final_random  the final term alone, like final, but with q ~ U{q_min, ..., q_max} as for sum: experiment
                       s counts once when q >= s, so the weights fall linearly instead of quadratically.
+--greedy              (divergence utility, sum) each observation's token is detached once its own step's term is
+                      computed, and so is the policy input: the term at step t trains only design t (its one-step
+                      information gain). Without it, the term at step t also reaches every earlier
+                      design through the history tokens.
 --tau-max             (divergence utility) tau ~ U[0, tau_max]: the information about theta blurred by noise of std
                       (1 - tau_max) / tau_max, which caps the reward for resolving a source beyond that scale;
                       --tau-anneal-frac f raises tau_max linearly to 1 over the last f of the steps (the policy at the
                       start of the annealing is also saved as <out>_before_anneal.pt).
---config file.yaml   sets the defaults of these arguments (see configs/lf and flow_bed.config).
+--config file.yaml   sets the defaults of these arguments (see runs/configs/lf and flow_bed.config).
 
-    python scripts/train_lf_policy.py --config configs/lf/policy_div.yaml --out checkpoints/lf_policy_div.pt
-    python scripts/train_lf_policy.py --utility divergence --out checkpoints/lf_policy_div.pt
-    python scripts/train_lf_policy.py --utility density --batch 64 --out checkpoints/lf_policy_density.pt
+    python runs/scripts/training/train_lf_policy.py --config runs/configs/lf/policy_div.yaml --out checkpoints/lf_policy_div.pt
+    python runs/scripts/training/train_lf_policy.py --utility divergence --out checkpoints/lf_policy_div.pt
+    python runs/scripts/training/train_lf_policy.py --utility density --batch 64 --out checkpoints/lf_policy_density.pt
 """
 
 from __future__ import annotations
@@ -37,30 +41,13 @@ import time
 from pathlib import Path
 
 import torch
-from train_lf_flow import build_encoder, build_flow, q_max_at
 
 from flow_bed.config import parse_args
-from flow_bed.models import LikelihoodGuidanceModel, PosteriorSampler
-from flow_bed.models.flow_matching import LEGACY_ACTIVATION
+from flow_bed.lf.builders import ENCODER_KEYS, build_encoder, build_flow, build_sim
+from flow_bed.lf.training import q_max_at
+from flow_bed.models import PosteriorSampler
 from flow_bed.models.policy import Policy
 from flow_bed.models.posterior_sampler import exact_divergence, hutchinson_divergence
-from flow_bed.simulators.location_finding import LocationFinding
-
-ENCODER_KEYS = ("encoder", "enc_hidden_dims", "embed_dim", "attn_layers", "attn_heads", "y_loc", "y_scale")
-
-
-def load_policy(pk: dict, guidance: LikelihoodGuidanceModel, sim: LocationFinding) -> Policy:
-    """Policy from a checkpoint of this script: on its own encoder if it has one, else on the guidance model's."""
-    if "encoder" in pk:
-        encoder = build_encoder(pk["config"]["policy_encoder"], sim)
-        encoder.load_state_dict(pk["encoder"])
-    else:
-        encoder = guidance.encoder
-    policy = Policy(encoder, sim.eps_dim, pk["config"]["policy_hidden_dims"],
-                    pk["config"].get("activation", LEGACY_ACTIVATION), pk["config"].get("design_bound"),
-                    pk["config"].get("bound_type", "radial"))
-    policy.net.load_state_dict(pk["policy"])
-    return policy
 
 
 def main() -> None:
@@ -88,7 +75,7 @@ def main() -> None:
     p.add_argument("--out", type=Path, default=Path("checkpoints/lf_policy.pt"))
     p.add_argument("--log-csv", type=Path, default=None, help="write one row per training step (for convergence plots)")
     p.add_argument("--detach-policy-input", action="store_true",
-                   help="detach the encoded history the policy sees (as JADAI): no gradient through its input")
+                   help="detach the encoded history the policy sees: no gradient through its input")
     p.add_argument("--own-encoder", action="store_true",
                    help="give the policy its own history encoder (fresh, trained with the head) instead of the flow's")
     p.add_argument("--policy-enc-hidden-dims", type=int, nargs="+", default=None,
@@ -96,6 +83,9 @@ def main() -> None:
     p.add_argument("--policy-term", choices=["sum", "final", "final_random"], default="sum",
                    help="divergence utility: sum over the rollout's steps, or its final term only with q = q_max "
                         "(final) or with a random q (final_random)")
+    p.add_argument("--greedy", action="store_true",
+                   help="divergence utility, sum: detach every history token after its own step's term (and the "
+                        "policy input), so each term trains only its own design")
     p.add_argument("--tau-max", type=float, default=1.0, help="divergence utility: tau ~ U[0, tau_max]")
     p.add_argument("--tau-anneal-frac", type=float, default=0.0,
                    help="raise tau_max linearly to 1 over this last fraction of the steps")
@@ -107,14 +97,19 @@ def main() -> None:
         args.divergence = "exact" if args.utility == "divergence" else "hutchinson"
     if args.own_encoder and args.detach_policy_input:
         p.error("--detach-policy-input would leave the policy's own encoder untrained")
+    if args.greedy:
+        if args.utility != "divergence" or args.policy_term != "sum" or args.own_encoder:
+            p.error("--greedy needs --utility divergence, --policy-term sum and the flow's encoder")
+        args.detach_policy_input = True  # else design t reaches later terms through the policy's next input
     cfg = {**vars(args), "flow_ckpt": str(args.flow_ckpt), "out": str(args.out), "log_csv": str(args.log_csv)}
 
     torch.manual_seed(args.seed)
     dev = torch.device(args.device)
-    sim = LocationFinding()
 
-    # frozen flow: prior, guidance and history encoder
+    # frozen flow: prior, guidance and history encoder; the outcome model (sigma, m) is the flow's
     ck = torch.load(args.flow_ckpt, map_location=dev)
+    sim = build_sim(ck["config"])
+    cfg.update(sigma=sim.sigma, m=sim.m)
     if args.own_encoder:
         cfg["policy_encoder"] = {k: ck["config"][k] for k in ENCODER_KEYS if k in ck["config"]}
         cfg["policy_encoder"]["activation"] = args.activation
@@ -183,8 +178,9 @@ def main() -> None:
             h_in = h_o if enc_o is not None else (h_f.detach() if args.detach_policy_input else h_f)
             xi = policy.design(h_in)[:, None]  # next design (B, 1, dx), from the history so far
             y_new = sim.simulate(theta, xi)  # reparametrised: gradients reach the design
-            tok_f.append(enc_f.tokens(y_new, xi))
-            h_f = enc_f.pool(torch.cat(tok_f, dim=1))
+            tok = enc_f.tokens(y_new, xi)
+            h_f = enc_f.pool(torch.cat(tok_f + [tok], dim=1))
+            tok_f.append(tok.detach() if args.greedy else tok)  # greedy: later terms do not reach this design
             if enc_o is not None:
                 tok_o.append(enc_o.tokens(y_new, xi))
                 h_o = enc_o.pool(torch.cat(tok_o, dim=1))

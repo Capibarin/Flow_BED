@@ -2,8 +2,8 @@
 design on the same history (true likelihood and true posterior only, so it does not depend on the posterior model).
 
 For each Figure 5 row (same true sources and rollouts as lf_rollout_figures.py) and each t, with samples of the true
-p(theta | h_{1:t-1}) (lf_true_posterior.true_posterior_samples; the prior for t = 1):
-  policy      EIG(xi_t | h_{1:t-1}) of the policy's design (nested MC, lf_true_posterior.one_step_eig)
+p(theta | h_{1:t-1}) (flow_bed.lf.true_posterior.true_posterior_samples; the prior for t = 1):
+  policy      EIG(xi_t | h_{1:t-1}) of the policy's design (nested MC, flow_bed.lf.true_posterior.one_step_eig)
   best        max over designs: coarse grid on [-3, 3]^2, Adam ascent (common random numbers) from the 8 best grid
               points and from xi_t, end points evaluated like xi_t
   ascent      the end point of the ascent started at xi_t (is a good design within reach of the policy's?)
@@ -11,7 +11,7 @@ The sum of the best one-step EIGs is a reference on the policy's own histories, 
 per-row table and averages over phases of the rollout; saves eig_per_step_<name>.pt and .png to --out.
 Default settings take ~80 min for 5 rows x 30 steps on a V100; --light ~4x less.
 
-    python scripts/eval_lf_eig_per_step.py --flow-ckpt checkpoints/lf_flow.pt \
+    python runs/scripts/evaluation/eval_lf_eig_per_step.py --flow-ckpt checkpoints/lf_flow.pt \
         --policy divergence=checkpoints/lf_policy_div.pt --out checkpoints/figures_v2
 """
 
@@ -24,15 +24,13 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
-import lf_rollout_figures as lrf
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from lf_true_posterior import one_step_eig, true_posterior_samples
-from train_lf_flow import build_flow
-from train_lf_policy import load_policy
 
-from flow_bed.simulators.location_finding import LocationFinding
+from flow_bed.lf.builders import build_flow, build_sim, load_policy
+from flow_bed.lf.rollouts import fig5_examples, rollout
+from flow_bed.lf.true_posterior import one_step_eig, true_posterior_samples
 
 # sample sizes: posterior samples, policy / end-point evaluation (outer, inner), grid (spacing, outer, inner),
 # ascent (outer, inner, iterations)
@@ -41,6 +39,7 @@ SETTINGS = {
     "light": {"post": 10_000, "eval": (2000, 10_000), "grid": (0.2, 300, 5000), "ascent": (300, 3000, 100)},
 }
 PHASES = [(1, 1), (2, 4), (5, 10), (11, 20), (21, 30)]
+DESIGN_COLOR = "#3fa9f5"  # as in lf_rollout_figures.py
 
 
 def eig_no_grad(sim, xi, th_in, th_out, noise, chunk):
@@ -91,17 +90,18 @@ def main() -> None:
     args = p.parse_args()
 
     dev = torch.device(args.device)
-    sim = LocationFinding()
     cfg = SETTINGS["light" if args.light else "full"]
     guidance = None
-    if any(spec.split("=", 1)[1] != "random" for spec in args.policy):
-        ck = torch.load(args.flow_ckpt, map_location=dev)
+    needs_flow = any(spec.split("=", 1)[1] != "random" for spec in args.policy)
+    ck = torch.load(args.flow_ckpt, map_location=dev) if needs_flow else None
+    sim = build_sim(ck["config"] if ck is not None else {})  # the flow's outcome model (default for random designs alone)
+    if ck is not None:
         _, guidance = build_flow(ck["config"], sim)
         guidance.load_state_dict(ck["guidance"])
         guidance.to(dev).eval()
     g1 = torch.arange(-3, 3 + 1e-6, cfg["grid"][0], device=dev)
     grid = torch.stack(torch.meshgrid(g1, g1, indexing="xy"), -1).reshape(-1, 2)
-    thetas, seeds = lrf.fig5_examples(sim, args.rows, args.seed, dev)
+    thetas, seeds = fig5_examples(sim, args.rows, args.seed, dev)
     args.out.mkdir(parents=True, exist_ok=True)
 
     for spec in args.policy:
@@ -110,7 +110,7 @@ def main() -> None:
         gen = torch.Generator(device=dev).manual_seed(args.sampler_seed)
         res, t0 = [], time.time()
         for r, (theta, seed) in enumerate(zip(thetas, seeds)):
-            eps, y = lrf.rollout(sim, policy, theta, args.T, seed)
+            eps, y = rollout(sim, policy, theta, args.T, seed)
             recs = []
             for t in range(1, args.T + 1):
                 post, info = true_posterior_samples(sim, y[0, :t - 1, 0], eps[0, :t - 1], cfg["post"], gen)
@@ -140,7 +140,7 @@ def main() -> None:
         ts = np.arange(1, args.T + 1)
         for r, ax in enumerate(axes[0]):
             ax.plot(ts, B[r], "o-", color="k", ms=3, label="best one-step design")
-            ax.plot(ts, P[r], "o-", color=lrf.DESIGN_COLOR, ms=3, label=r"policy design $\xi_t$")
+            ax.plot(ts, P[r], "o-", color=DESIGN_COLOR, ms=3, label=r"policy design $\xi_t$")
             ax.plot(ts, A[r], "--", color="orange", lw=1, label=r"local ascent from $\xi_t$")
             ax.set_title(f"row {r + 1}: sum {P[r].sum():.1f} / {B[r].sum():.1f}")
             ax.set_xlabel("t")

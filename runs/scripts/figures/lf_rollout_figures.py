@@ -1,12 +1,12 @@
-"""JADAI-style location finding rollout figures (their Figures 2 and 5) for our flow model.
+"""Location finding rollout figures (Figures 2 and 5) for the flow model.
 
 For every design source (random designs from the prior and each given policy) and the same true sources theta,
 runs one rollout of max(t) experiments and shows posterior samples q(theta | h_t), the designs and the ground truth:
     Figure 2: t in {1, 3, 5, 7, 10} plus a corner plot of the posterior at t = 10
     Figure 5: 5 examples (rows) x t in {1, 3, 5, 7, 10, 15, 20, 30}
-With the default seeds the true sources equal those of the JADAI figures made with jadai_lf/scripts.
+The default seeds fix the true sources, so figures of different models show the same examples.
 
-    python scripts/lf_rollout_figures.py --flow-ckpt checkpoints/lf_flow.pt \
+    python runs/scripts/figures/lf_rollout_figures.py --flow-ckpt checkpoints/lf_flow.pt \
         --policy divergence=checkpoints/lf_policy_div.pt --policy density=checkpoints/lf_policy_density.pt
 """
 
@@ -22,52 +22,16 @@ import matplotlib.pyplot as plt
 import torch
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.lines import Line2D
-from train_lf_flow import build_flow
-from train_lf_policy import load_policy
 
+from flow_bed.lf.builders import build_flow, build_sim, load_policy
+from flow_bed.lf.rollouts import rollout_with_posteriors
 from flow_bed.models import PosteriorSampler
-from flow_bed.simulators.location_finding import LocationFinding
 
 FIG2_T = [1, 3, 5, 7, 10]
 FIG5_T = [1, 3, 5, 7, 10, 15, 20, 30]
 EXTENT = (-3, 3)
 POST_CMAP = LinearSegmentedColormap.from_list("post", ["#ffffff", "#f7a8d8", "#e7298a", "#b5006b"])
 DESIGN_COLOR = "#3fa9f5"
-
-
-@torch.no_grad()
-def rollout(sim, policy, theta, n, seed):
-    """One rollout of n experiments for theta (1, K * dx) (policy=None: random designs) -> eps (1, n, dx), y (1, n, 1)."""
-    torch.manual_seed(seed)
-    eps = torch.zeros(1, 0, sim.eps_dim, device=theta.device)
-    y = torch.zeros(1, 0, sim.y_dim, device=theta.device)
-    for _ in range(n):
-        xi = sim.sample_design(1, 1, theta.device) if policy is None else policy(y, eps)[:, None]
-        eps = torch.cat([eps, xi], dim=1)
-        y = torch.cat([y, sim.simulate(theta, xi)], dim=1)
-    return eps, y
-
-
-def fig5_examples(sim, n_rows, seed, dev):
-    """True sources theta (1, K * dx) and rollout seeds of the Figure 5 rows (as in main)."""
-    thetas, seeds = [], []
-    for i in range(1, 1 + n_rows):
-        torch.manual_seed(seed + 1000 * i)
-        thetas.append(sim.sample_prior(1, dev))
-        seeds.append(seed + 1000 * i + 1)
-    return thetas, seeds
-
-
-@torch.no_grad()
-def rollout_with_posteriors(sim, guidance, sampler, policy, theta, ts, n_samples, seed):
-    """One rollout of max(ts) experiments (policy=None: random designs); posterior samples for every t in ts."""
-    eps, y = rollout(sim, policy, theta, max(ts), seed)
-    posts = {}
-    for t in ts:
-        torch.manual_seed(seed + t)
-        history = guidance.encoder(y[:, :t], eps[:, :t])
-        posts[t] = sampler.sample(n_samples, history)[0].reshape(n_samples, sim.n_sources, sim.dx).cpu().numpy()
-    return eps[0].cpu().numpy(), posts
 
 
 def plot_panel(ax, post, designs, theta, t):
@@ -167,8 +131,8 @@ def main() -> None:
     args = p.parse_args()
 
     dev = torch.device(args.device)
-    sim = LocationFinding()
     ck = torch.load(args.flow_ckpt, map_location=dev)
+    sim = build_sim(ck["config"])
     prior, guidance = build_flow(ck["config"], sim)
     prior.load_state_dict(ck["prior"])
     guidance.load_state_dict(ck["guidance"])

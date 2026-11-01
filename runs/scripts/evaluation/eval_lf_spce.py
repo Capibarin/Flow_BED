@@ -1,11 +1,11 @@
-"""sPCE lower bound on the total EIG of location-finding design sequences, computed as in JADAI's eval_lf_spce.py.
+"""sPCE lower bound on the total EIG of location-finding design sequences.
 
 For each run, theta_0 ~ p(theta), T designs from a policy (or random designs from the prior) with observations
 y ~ p(y | theta_0, eps), and L contrastive samples theta_1..L ~ p(theta):
     sPCE = log p(h | theta_0) - log( sum_{l=0..L} p(h | theta_l) ) + log(L + 1)
 Uses only the true likelihood, so it does not depend on the posterior model.
 
-    python scripts/eval_lf_spce.py --flow-ckpt checkpoints/lf_flow.pt --policy div_exact=checkpoints/lf_policy_div_exact.pt
+    python runs/scripts/evaluation/eval_lf_spce.py --flow-ckpt checkpoints/lf_flow.pt --policy div_exact=checkpoints/lf_policy_div_exact.pt
 """
 
 from __future__ import annotations
@@ -16,9 +16,8 @@ from pathlib import Path
 
 import torch
 from torch import Tensor
-from train_lf_flow import build_flow
-from train_lf_policy import load_policy
 
+from flow_bed.lf.builders import build_flow, build_sim, load_policy
 from flow_bed.simulators.location_finding import LocationFinding
 
 
@@ -61,8 +60,8 @@ def main() -> None:
     p.add_argument("--policy", action="append", default=[], help="NAME=PATH of a policy checkpoint (repeatable)")
     p.add_argument("--no-random", action="store_true", help="skip the random-design baseline")
     p.add_argument("--T", type=int, default=30)
-    p.add_argument("--L", type=int, default=500_000, help="number of contrastive samples (JADAI: 5e5)")
-    p.add_argument("--runs", type=int, default=4096, help="number of evaluation runs (JADAI: 4096)")
+    p.add_argument("--L", type=int, default=500_000, help="number of contrastive samples")
+    p.add_argument("--runs", type=int, default=4096, help="number of evaluation runs")
     p.add_argument("--run-batch", type=int, default=16)
     p.add_argument("--chunk", type=int, default=20_000, help="contrastive samples per likelihood evaluation")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -70,10 +69,10 @@ def main() -> None:
     args = p.parse_args()
 
     dev = torch.device(args.device)
-    sim = LocationFinding()
+    ck = torch.load(args.flow_ckpt, map_location=dev) if args.policy else None
+    sim = build_sim(ck["config"] if ck is not None else {})  # the flow's outcome model (default for random designs alone)
     sources = {} if args.no_random else {"random": None}
-    if args.policy:
-        ck = torch.load(args.flow_ckpt, map_location=dev)
+    if ck is not None:
         _, guidance = build_flow(ck["config"], sim)
         guidance.load_state_dict(ck["guidance"])
         guidance.to(dev).eval()

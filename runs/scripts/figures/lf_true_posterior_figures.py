@@ -6,7 +6,7 @@ lf_true_posterior.true_posterior_samples. Separates errors of the posterior mode
 the two figures agree, the designs are to blame. The flow checkpoint is needed only for policies that read its
 history encoder.
 
-    python scripts/lf_true_posterior_figures.py --flow-ckpt checkpoints/lf_flow.pt \
+    python runs/scripts/figures/lf_true_posterior_figures.py --flow-ckpt checkpoints/lf_flow.pt \
         --policy divergence=checkpoints/lf_policy_div.pt --out checkpoints/figures_v2
 """
 
@@ -17,12 +17,11 @@ from pathlib import Path
 
 import lf_rollout_figures as lrf
 import torch
-from lf_true_posterior import true_posterior_samples
 from matplotlib.lines import Line2D
-from train_lf_flow import build_flow
-from train_lf_policy import load_policy
 
-from flow_bed.simulators.location_finding import LocationFinding
+from flow_bed.lf import rollouts
+from flow_bed.lf.builders import build_flow, build_sim, load_policy
+from flow_bed.lf.true_posterior import true_posterior_samples
 
 
 def legend(fig, y):  # as lrf.legend, labelled as the true posterior
@@ -48,14 +47,15 @@ def main() -> None:
     args = p.parse_args()
 
     dev = torch.device(args.device)
-    sim = LocationFinding()
     guidance = None
-    if any(spec.split("=", 1)[1] != "random" for spec in args.policy):
-        ck = torch.load(args.flow_ckpt, map_location=dev)
+    needs_flow = any(spec.split("=", 1)[1] != "random" for spec in args.policy)
+    ck = torch.load(args.flow_ckpt, map_location=dev) if needs_flow else None
+    sim = build_sim(ck["config"] if ck is not None else {})  # the flow's outcome model (default for random designs alone)
+    if ck is not None:
         _, guidance = build_flow(ck["config"], sim)
         guidance.load_state_dict(ck["guidance"])
         guidance.to(dev).eval()
-    thetas, seeds = lrf.fig5_examples(sim, args.fig5_rows, args.seed, dev)
+    thetas, seeds = rollouts.fig5_examples(sim, args.fig5_rows, args.seed, dev)
     gen = torch.Generator(device=dev).manual_seed(args.sampler_seed)
     lrf.legend = legend
     args.out.mkdir(parents=True, exist_ok=True)
@@ -65,7 +65,7 @@ def main() -> None:
         policy = None if path == "random" else load_policy(torch.load(path, map_location=dev), guidance, sim).to(dev).eval()
 
         def rollout(theta, ts, seed, policy=policy, name=name):
-            eps, y = lrf.rollout(sim, policy, theta, max(ts), seed)
+            eps, y = rollouts.rollout(sim, policy, theta, max(ts), seed)
             posts = {}
             for t in ts:
                 x, info = true_posterior_samples(sim, y[0, :t, 0], eps[0, :t], args.n_samples, gen)

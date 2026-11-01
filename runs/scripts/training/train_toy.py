@@ -1,6 +1,6 @@
 """Train the prior flow and the likelihood-guidance model on the toy linear-Gaussian problem.
 
-    python scripts/train_toy.py --steps 3000 --out checkpoints/toy.pt
+    python runs/scripts/training/train_toy.py --steps 3000 --out checkpoints/toy.pt
 """
 
 from __future__ import annotations

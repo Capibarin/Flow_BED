@@ -1,6 +1,6 @@
 """Guided posterior sampling + log-likelihood on the toy problem, checked against the analytic posterior.
 
-    python scripts/sample_toy.py --ckpt checkpoints/toy.pt --n-obs 3
+    python runs/scripts/figures/sample_toy.py --ckpt checkpoints/toy.pt --n-obs 3
 """
 
 from __future__ import annotations

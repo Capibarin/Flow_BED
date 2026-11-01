@@ -1,0 +1,14 @@
+# Prior flow alone (stage 1 of runs/sbatches/lf_pipeline.sbatch): MLP 3 x 512, SiLU, 50 x 1000 steps, batch 256,
+# one-cycle with max lr 1e-3, seed 42 -- the recipe of checkpoints/train_curve_anneal_silu/ckpts/prior_silu.pt.
+# The prior is theta ~ N(0, I) only, so it does not depend on the outcome model (sigma, m).
+#   runs/scripts/training/train_lf_flow.py --config runs/configs/lf/prior.yaml --out <prior.pt>
+# Then the guidance on it:
+#   runs/scripts/training/train_lf_flow.py --config runs/configs/lf/flow_attn.yaml --init-prior <prior.pt>
+prior_only: true
+prior_epochs: 50
+steps_per_epoch: 1000
+batch: 256
+lr: 1.0e-3
+hidden_dims: [512, 512, 512]
+activation: silu
+seed: 42
