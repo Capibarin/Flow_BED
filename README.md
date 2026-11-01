@@ -60,7 +60,9 @@ attention posterior, the decoupled divergence policy and the joint policy + post
 
 The outcome model `y ~ N(log(b + sum_k a / (m + |xi - theta_k|^2)), sigma^2)` is set when the flow is trained
 (`sigma`, `m` in `flow_attn.yaml`, or `--sigma`, `--m`) and stored in its checkpoint; the policy, evaluation and figure
-scripts take it from the flow checkpoint. Checkpoints without these keys use the defaults (0.5, 1e-4).
+scripts take it from the flow checkpoint. Checkpoints without these keys use the defaults (0.5, 1e-4). Scripts that
+can run on random designs alone (`eval_lf_spce.py`, `eval_lf_eig_per_step.py`, `lf_true_posterior_figures.py`)
+take `--sigma` and `--m` for that case; next to a flow, a value that differs from the flow's is an error.
 
 ```bash
 # 1) posterior flow on random designs, from scratch: prior (50 x 1000 steps), then encoder + guidance (400 x 1000 steps)
@@ -96,14 +98,15 @@ policy sees), `--greedy` (each step's term trains only its own design), `--polic
 
 ### On a SLURM cluster
 
-`runs/sbatches/lf_pipeline.sbatch` trains the prior (`prior.yaml`, `--prior-only`), then encoder + guidance on it
-(`flow_attn.yaml`), then a policy (`policy_div.yaml`), one after the other on one GPU. Settings are environment
-variables (see the file's header); finished stages leave `<stage>.done` and are skipped when the job is resubmitted.
+`runs/sbatches/lf_pipeline.sbatch` trains the prior (`prior.yaml`), then encoder + guidance on it (`flow_attn.yaml`),
+then a policy (`policy_div.yaml`) into `checkpoints/runs/$RUN`; `runs/sbatches/lf_eval.sbatch` evaluates a policy
+(sPCE and Figures 2 and 5). Settings are environment variables, see the top of each file.
 
 ```bash
-mkdir -p logs && sbatch runs/sbatches/lf_pipeline.sbatch
-RUN=sigma1 GUIDANCE_ARGS="--sigma 1.0" POLICY_NAME=detach POLICY_ARGS="--detach-policy-input" \
+mkdir -p logs
+RUN=sigma1 FLOW_ARGS="--sigma 1.0" POLICY=detach POLICY_ARGS="--detach-policy-input" \
     sbatch runs/sbatches/lf_pipeline.sbatch
+RUN=sigma1 POLICY=detach sbatch --dependency=afterok:<training job id> runs/sbatches/lf_eval.sbatch
 ```
 
 ### Flow-time density of the policy gradient

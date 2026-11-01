@@ -18,6 +18,18 @@ def build_sim(cfg: dict) -> LocationFinding:
     return LocationFinding(**{k: cfg[k] for k in OUTCOME_KEYS if cfg.get(k) is not None})
 
 
+
+def resolve_sim(flow_cfg: dict | None, **given: float | None) -> LocationFinding:
+    """Simulator with the outcome model of a flow's config, or without a flow of ``given`` (sigma, m; None = default).
+    A value given together with a flow must equal the flow's (ValueError otherwise)."""
+    if flow_cfg is None:
+        return build_sim(given)
+    sim = build_sim(flow_cfg)
+    for k, v in given.items():
+        if v is not None and v != getattr(sim, k):
+            raise ValueError(f"--{k} {v} differs from the flow's ({getattr(sim, k)})")
+    return sim
+
 def build_encoder(cfg: dict, sim: LocationFinding) -> HistoryEncoder | SelfAttentionHistoryEncoder:
     """History encoder from a config dict (the parsed arguments)."""
     y_norm = {"y_loc": cfg.get("y_loc", 0.0), "y_scale": cfg.get("y_scale", 1.0)}

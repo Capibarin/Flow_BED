@@ -20,7 +20,7 @@ import torch
 from matplotlib.lines import Line2D
 
 from flow_bed.lf import rollouts
-from flow_bed.lf.builders import build_flow, build_sim, load_policy
+from flow_bed.lf.builders import build_flow, load_policy, resolve_sim
 from flow_bed.lf.true_posterior import true_posterior_samples
 
 
@@ -42,6 +42,11 @@ def main() -> None:
     p.add_argument("--n-samples", type=int, default=10_000)
     p.add_argument("--seed", type=int, default=0, help="as --seed of lf_rollout_figures.py")
     p.add_argument("--sampler-seed", type=int, default=123)
+    p.add_argument("--sigma", type=float, default=None,
+                   help="observation noise std of y for random designs alone (default 0.5); with a flow: the flow's")
+    p.add_argument("--m", type=float, default=None,
+                   help="offset m in a / (m + |xi - theta_k|^2) for random designs alone (default 1e-4); "
+                        "with a flow: the flow's")
     p.add_argument("--fig5-rows", type=int, default=5)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
@@ -50,7 +55,10 @@ def main() -> None:
     guidance = None
     needs_flow = any(spec.split("=", 1)[1] != "random" for spec in args.policy)
     ck = torch.load(args.flow_ckpt, map_location=dev) if needs_flow else None
-    sim = build_sim(ck["config"] if ck is not None else {})  # the flow's outcome model (default for random designs alone)
+    try:
+        sim = resolve_sim(ck["config"] if ck is not None else None, sigma=args.sigma, m=args.m)
+    except ValueError as e:
+        p.error(str(e))
     if ck is not None:
         _, guidance = build_flow(ck["config"], sim)
         guidance.load_state_dict(ck["guidance"])

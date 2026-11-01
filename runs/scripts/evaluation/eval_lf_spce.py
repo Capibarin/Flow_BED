@@ -17,7 +17,7 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
-from flow_bed.lf.builders import build_flow, build_sim, load_policy
+from flow_bed.lf.builders import build_flow, load_policy, resolve_sim
 from flow_bed.simulators.location_finding import LocationFinding
 
 
@@ -66,11 +66,19 @@ def main() -> None:
     p.add_argument("--chunk", type=int, default=20_000, help="contrastive samples per likelihood evaluation")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--sigma", type=float, default=None,
+                   help="observation noise std of y for random designs alone (default 0.5); with a flow: the flow's")
+    p.add_argument("--m", type=float, default=None,
+                   help="offset m in a / (m + |xi - theta_k|^2) for random designs alone (default 1e-4); "
+                        "with a flow: the flow's")
     args = p.parse_args()
 
     dev = torch.device(args.device)
     ck = torch.load(args.flow_ckpt, map_location=dev) if args.policy else None
-    sim = build_sim(ck["config"] if ck is not None else {})  # the flow's outcome model (default for random designs alone)
+    try:
+        sim = resolve_sim(ck["config"] if ck is not None else None, sigma=args.sigma, m=args.m)
+    except ValueError as e:
+        p.error(str(e))
     sources = {} if args.no_random else {"random": None}
     if ck is not None:
         _, guidance = build_flow(ck["config"], sim)

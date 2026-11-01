@@ -41,7 +41,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from flow_bed.config import parse_args
-from flow_bed.lf.builders import OUTCOME_KEYS, build_flow, build_guidance, build_sim
+from flow_bed.lf.builders import build_flow, build_guidance, resolve_sim
 from flow_bed.lf.training import q_max_at, train
 from flow_bed.models import LikelihoodGuidanceModel, PriorFlowModel
 from flow_bed.models.policy import Policy
@@ -141,13 +141,10 @@ def main() -> None:
     torch.manual_seed(args.seed)
     dev = torch.device(args.device)
     ck = torch.load(args.init_flow, map_location=dev) if args.init_flow is not None else None
-    if ck is not None:  # the outcome model is the trained flow's
-        flow_sim = build_sim(ck["config"])
-        for k in OUTCOME_KEYS:
-            if cfg[k] is not None and cfg[k] != getattr(flow_sim, k):
-                p.error(f"--{k} {cfg[k]} differs from the flow's ({getattr(flow_sim, k)})")
-            cfg[k] = getattr(flow_sim, k)
-    sim = build_sim(cfg)
+    try:  # the outcome model is the trained flow's
+        sim = resolve_sim(ck["config"] if ck is not None else None, sigma=args.sigma, m=args.m)
+    except ValueError as e:
+        p.error(str(e))
     cfg.update(sigma=sim.sigma, m=sim.m)
     B, spe = args.batch, args.steps_per_epoch
 
