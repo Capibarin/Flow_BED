@@ -1,0 +1,33 @@
+# The SIR flow used by every policy and evaluation (checkpoint "S_silu", currently at
+# /vol/main/checkpoints/scratch_2026-11-05_sir/sir_flow_S_silu.pt): prior flow on the filtered prior + history
+# encoder and guidance on uniform random designs, SiLU in the attention feed-forward, EMA of the guidance weights.
+# Chosen over the variants (--train-designs mix, --ordered-encoder, --y-transform sqrt, --t-sampling mix) by the
+# design-independent posterior score of eval_sir_posterior.py.
+# runs/scripts/training/train_sir_flow.py --config runs/configs/sir/flow.yaml --out CKPT.pt
+#     [--prior-from OTHER.pt]  reuse a trained prior so variants share it
+Q: 5
+q_min: 1
+prior_epochs: 50
+epochs: 400
+steps_per_epoch: 1000
+batch: 256
+lr: 1.0e-3
+hidden_dims: [512, 512, 512]
+guidance_hidden_dims: [512, 512, 512, 512]
+enc_hidden_dims: [256, 256]
+embed_dim: 64
+attn_layers: 4
+attn_heads: 4
+attn_ff_dim: 256
+bank: 50000              # paths in the training bank, re-simulated every `refresh` steps
+refresh: 5000
+ckpt_every: 50
+seed: 1
+train_designs: uniform   # uniform | mix (adds increasing-random and grid designs)
+ordered_encoder: false
+y_transform: linear      # linear | sqrt
+attn_activation: silu    # the "S_silu" option: SiLU in the attention layers' feed-forward part
+t_sampling: uniform      # uniform | mix (more weight near t = 1)
+ema_decay: 0.9999        # 0 disables the EMA copy; load the EMA weights with CKPT.pt@ema
+prior_from: null
+max_steps: null

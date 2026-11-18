@@ -5,18 +5,26 @@ Flow matching with learned likelihood guidance for Bayesian experimental design.
 ```
 src/flow_bed/
   config.py              YAML configs for the training scripts (--config)
-  models/                PriorFlowModel, LikelihoodGuidanceModel, history encoders, Policy, PosteriorSampler
-  simulators/            linear_gaussian.py (toy problem with analytic posterior), location_finding.py
+  models/                PriorFlowModel, LikelihoodGuidanceModel, history encoders, Policy, PosteriorSampler;
+                         guarded_sampling.py (freeze / cap guards against adaptive-solver hangs)
+  simulators/            linear_gaussian.py (toy problem with analytic posterior), location_finding.py,
+                         sir.py (SDE epidemic model of iDAD, Ivanova et al. 2021: simulator, path bank, designs)
   lf/                    location finding: builders.py (simulator, flow and policy from checkpoint configs),
                          training.py, rollouts.py, true_posterior.py
+  sir/                   SIR: encoders.py (encoder options + flow builder), builders.py (load_flow, rollout_designs)
 runs/
   configs/lf/            prior.yaml, flow_attn.yaml (encoder + guidance), policy_div.yaml, joint_div.yaml
+  configs/sir/           flow.yaml, policy_finalq.yaml, policy_sumdetach.yaml, eval_infonce.yaml
   sbatches/              lf_pipeline.sbatch: prior -> guidance -> policy on one GPU (SLURM)
   scripts/
-    training/            train_lf_flow.py, train_lf_policy.py, train_lf_joint.py, train_toy.py
-    evaluation/          eval_lf_spce.py, eval_lf_eig_per_step.py, eval_lf_posterior.py, eval_toy_nobs.py
-    analysis/            tau_rms.py (design-gradient RMS per flow time)
-    figures/             lf_rollout_figures.py, lf_true_posterior_figures.py, plot_rho.py, sample_toy.py
+    training/            train_lf_flow.py, train_lf_policy.py, train_lf_joint.py, train_toy.py,
+                         train_sir_flow.py, train_sir_policy.py
+    evaluation/          eval_lf_spce.py, eval_lf_eig_per_step.py, eval_lf_posterior.py, eval_toy_nobs.py,
+                         eval_sir_infonce.py, eval_sir_posterior.py, idad_designs.py (iDAD interop)
+    analysis/            tau_rms.py (design-gradient RMS per flow time), sir_seed_table.py,
+                         sir_static_basins.py, sir_window_paths.py
+    figures/             lf_rollout_figures.py, lf_true_posterior_figures.py, plot_rho.py, sample_toy.py,
+                         fig5_sir.py (+ idad_fig5_paths.json)
 tests/
 ```
 
@@ -124,4 +132,32 @@ bash runs/sbatches/lf_grid.sh
 python runs/scripts/analysis/tau_rms.py --flow-ckpt checkpoints/lf_flow_attn.pt \
     --policy checkpoints/lf_policy_div_finalrandq.pt --out checkpoints/tau_rms.json
 python runs/scripts/figures/plot_rho.py --rms checkpoints/tau_rms.json --out checkpoints/figures_v2/tau_rho.png
+```
+
+## SIR (SDE epidemic model, iDAD's setup)
+
+Stochastic SIR epidemic with implicit likelihood (Ivanova et al. 2021): theta = (beta, gamma), 5 measurement
+times chosen adaptively, observation = number of infected at the nearest grid point of a pre-simulated path bank.
+The design gradient is a straight-through central difference over +-`dy-window` time units; the wide window
+(+-0.5, against iDAD's +-0.01) is what makes policy training strong and seed-stable.
+
+```bash
+# stage 1: prior + guidance flow (the critic and posterior for everything below)
+python runs/scripts/training/train_sir_flow.py --config runs/configs/sir/flow.yaml --out checkpoints/sir_flow.pt
+
+# stage 2: design policy on the frozen flow (3 seeds: --seed 42/43/44)
+python runs/scripts/training/train_sir_policy.py --config runs/configs/sir/policy_finalq.yaml \
+    --flow-ckpt checkpoints/sir_flow.pt --out checkpoints/sir_policy_finalq.pt
+
+# evaluation: InfoNCE / BA / coverage on 4096 held-out runs, paired across design sets
+python runs/scripts/evaluation/eval_sir_infonce.py --config runs/configs/sir/eval_infonce.yaml \
+    --flow-ckpt checkpoints/sir_flow.pt --designs equal random finalq=checkpoints/sir_policy_finalq.pt \
+    --out-json eval.json
+# final scoring (iDAD's convention; slow): add --solver dopri5 --L 10000
+python runs/scripts/analysis/sir_seed_table.py eval.pt ...   # seed table + paired differences
+
+# design-independent flow comparison, iDAD interop, figures
+python runs/scripts/evaluation/eval_sir_posterior.py --flows REF.pt OTHER.pt@ema
+python runs/scripts/evaluation/idad_designs.py RUN_DIR OUT.pt   # in iDAD's own environment
+python runs/scripts/figures/fig5_sir.py checkpoints/sir_flow.pt checkpoints/sir_policy_finalq.pt finalq
 ```

@@ -1,0 +1,24 @@
+# The sum objective with the policy input detached, for comparison with policy_finalq.yaml. Seed study (3 seeds,
+# eval_sir_infonce.py): InfoNCE 3.662-3.666 at +-0.5 and +-0.1, about 0.11 below iDAD and 0.17 below finalq;
+# early vs default start makes no difference.
+#   +-0.1 window: --dy-window 0.1 --epochs 120;   early start: --init-frac 0.15
+# runs/scripts/training/train_sir_policy.py --config runs/configs/sir/policy_sumdetach.yaml --out POLICY.pt [--seed N]
+flow_ckpt: /vol/main/checkpoints/scratch_2026-11-05_sir/sir_flow_S_silu.pt
+policy_term: sum
+detach_policy_input: true
+Q: 5
+q_min: 5
+epochs: 40
+steps_per_epoch: 781
+batch: 256
+lr: 1.0e-4
+policy_hidden_dims: [128, 128, 128, 128]
+bank: 25000
+refresh: 2500
+ckpt_every: 10
+max_steps: null
+log_csv: null
+seed: 42
+dy_window: 0.5
+init_frac: null
+flow_time: strat8

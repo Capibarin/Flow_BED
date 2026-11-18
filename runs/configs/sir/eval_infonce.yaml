@@ -1,0 +1,24 @@
+# Routine SIR evaluation: InfoNCE / BA / coverage with the S_silu flow as the critic, rk4 with 20 steps, 4096
+# held-out runs (bank seed 12345) and L = 1000 shared contrastive draws. The same critic and runs for every design
+# set, so all comparisons are paired and fair; the per-run values in <out-json>.pt pair across evaluation files.
+# runs/scripts/evaluation/eval_sir_infonce.py --config runs/configs/sir/eval_infonce.yaml \
+#     --designs equal random NAME=POLICY.pt NAME=file:DESIGNS.pt --out-json OUT.json
+#
+# Final scoring (iDAD's convention: L = 10000, accurate solver; ~4 h per design set at 4096 runs):
+#     --solver dopri5 --L 10000
+# rk4 then only screens: the contrastive pairs within screen_margin nats of their run's best term are re-solved
+# with dopri5 under the freeze guard (a point leaving |x| <= freeze_radius gets density 0), the rest keep their
+# rk4 value. Smoke-tested 2026-11-09: 0 kept pairs frozen, rk4-dropped pairs all >= 29 nats below the row max.
+flow_ckpt: /vol/main/checkpoints/scratch_2026-11-05_sir/sir_flow_S_silu.pt
+T: 5
+runs: 4096
+L: 1000
+chunk: 100000            # pairs per ODE solve
+solver: rk4              # rk4 (routine) | dopri5 (final scoring: rk4 screening + freeze guard)
+n_steps: 20              # rk4 steps (also the screening pass of a final scoring)
+screen_margin: 30.0      # dopri5 only: re-solve pairs within this many nats of their run's best rk4 term
+freeze_radius: 20.0      # dopri5 only: freeze a point once |x| > R (density 0)
+freeze_cap: 3000         # dopri5 only: vector-field call backstop per chunk
+calib: 1000              # coverage runs (0 disables; stays on rk4 with dopri5)
+calib_samples: 1000
+bank: 50000

@@ -1,0 +1,29 @@
+# The best SIR policy of the 2026-11 studies: final_random objective on the full 5-step history (q = 5 on every
+# step), smoothed design gradient (dy-window 0.5), 8 stratified flow times, 40 epochs, default start.
+# Seed study (3 seeds, eval_sir_infonce.py, S_silu critic, rk4): InfoNCE 3.839 +- 0.007, +0.065 +- 0.009 over iDAD.
+# Variants as flags on top of this file:
+#   +-0.1 window:        --dy-window 0.1 --epochs 120   (3.834: tied with +-0.5)
+#   +-0.01 (iDAD's gradient): --dy-window 0.01 --epochs 400   (3.717, below iDAD, seed sd 0.079: the wide window
+#                             is what makes training better and stable)
+#   plain flow times:    --flow-time sample              (-0.005 to -0.013 vs strat8)
+#   early start:         --init-frac 0.15                (no effect at +-0.5 / +-0.1)
+# runs/scripts/training/train_sir_policy.py --config runs/configs/sir/policy_finalq.yaml --out POLICY.pt [--seed N]
+flow_ckpt: /vol/main/checkpoints/scratch_2026-11-05_sir/sir_flow_S_silu.pt
+policy_term: final_random
+detach_policy_input: false
+Q: 5
+q_min: 5                 # q = 5 always: the final term sees the full history
+epochs: 40
+steps_per_epoch: 781
+batch: 256
+lr: 1.0e-4
+policy_hidden_dims: [128, 128, 128, 128]
+bank: 25000
+refresh: 2500
+ckpt_every: 10
+max_steps: null
+log_csv: null
+seed: 42
+dy_window: 0.5           # half-width (time units) of the central difference d y / d tau
+init_frac: null          # default start: sigmoid(u) = 0.5 before training
+flow_time: strat8        # sample | batch | strat8 (8 stratified flow times per path, one shared rollout)
